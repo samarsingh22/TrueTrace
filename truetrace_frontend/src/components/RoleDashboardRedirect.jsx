@@ -6,7 +6,7 @@ export default function RoleDashboardRedirect() {
   const session = getSession();
 
   if (!session) {
-    return <Navigate to="/auth" replace />;
+    return <Navigate to="/login" replace />;
   }
 
   return <Navigate to={roleToDashboardPath(session.role)} replace />;

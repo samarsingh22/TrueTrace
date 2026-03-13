@@ -1,4 +1,4 @@
-const SCAN_LOG_STORAGE_KEY = "True Trace.ai.scan.events.v1";
+const SCAN_LOG_STORAGE_KEY = "sentinelchain.ai.scan.events.v1";
 
 function readRawEvents() {
   try {

@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { QRCodeCanvas } from "qrcode.react";
 import { Plus, ArrowRight, Shield, Search, AlertTriangle, CheckCircle, BarChart3, PackageCheck, Truck, Warehouse, ScanSearch, ShieldAlert, Map } from "lucide-react";
 import { motion as Motion, AnimatePresence } from "framer-motion";
+import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, RadialBarChart, RadialBar } from "recharts";
 import { APP_NAME, NETWORK_NAME, ROLE_OPTIONS, ROLES } from "../../config/sentinelChain";
 import { buildQrPayload } from "../../services/qrVerification";
 import { useSentinelDashboard } from "../../hooks/useSentinelDashboard";
@@ -26,6 +27,7 @@ function DashboardPage({ initialRole = ROLES.CONSUMER, lockRole = false }) {
     recallTxHash,
     lastCreatedBatch,
     batchData,
+    trackedBatches,
     recentScanEvents,
     setField,
     handleRoleChange,
@@ -38,28 +40,52 @@ function DashboardPage({ initialRole = ROLES.CONSUMER, lockRole = false }) {
     verifyBatch,
   } = useSentinelDashboard({ initialRole });
 
-  const sampleInventory = [
-    { batchId: "SC-114-A", status: "Verified" },
-    { batchId: "SC-214-B", status: "Pending" },
-    { batchId: "SC-887-Z", status: "Flagged" },
-  ];
-
-  const sampleTracking = [
-    "Batch SC-114-A received at North Hub",
-    "Batch SC-214-B in transit to City Depot",
-    "Batch SC-887-Z delayed at checkpoint",
-  ];
-
   const consumerBatchData = scannedBatchData || batchData;
-  const suspiciousSignals = consumerBatchData?.anomalyFlags?.length || 2;
+  const suspiciousSignals = Number(consumerBatchData?.anomalyFlags?.length || 0);
   const effectiveRole = role === "Pharmacy" ? ROLES.RETAILER : role;
   const hasKnownRole = Object.values(ROLES).includes(effectiveRole);
   const session = getSessionProfile();
 
+  const trackedBatchIds = new Set(
+    [
+      ...trackedBatches.map((item) => item.batchId),
+      ...recentScanEvents.map((event) => event.batchID),
+      lastCreatedBatch?.batchId,
+      consumerBatchData?.batchId,
+    ].filter(Boolean),
+  );
+
+  const totalBatches = trackedBatchIds.size;
+  const totalScans = recentScanEvents.length;
+  const suspiciousScans = Number(consumerBatchData?.suspiciousScans ?? suspiciousSignals ?? 0);
+  const trustScore = Math.max(0, Math.min(100, Number(consumerBatchData?.trustScore ?? 100 - suspiciousScans * 8)));
+
+  const volumeChartData = [
+    { name: "Batches", value: totalBatches },
+    { name: "Scans", value: totalScans },
+    { name: "Suspicious", value: suspiciousScans },
+  ];
+
+  const trustChartData = [{ name: "Trust", value: trustScore, fill: trustScore >= 75 ? "#22c55e" : trustScore >= 45 ? "#f59e0b" : "#ef4444" }];
+  const recalledCount = trackedBatches.filter((item) => item.recalled).length;
+  const avgTrust = trackedBatches.length
+    ? Math.round(trackedBatches.reduce((sum, item) => sum + Number(item.trustScore || 0), 0) / trackedBatches.length)
+    : 0;
+  const suspiciousBatchCount = trackedBatches.filter((item) => Number(item.suspiciousScans || 0) > 0).length;
+  const topLocations = Object.entries(
+    recentScanEvents.reduce((acc, event) => {
+      const key = String(event.location || "Unknown");
+      acc[key] = (acc[key] || 0) + 1;
+      return acc;
+    }, {}),
+  )
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 4);
+
   const handleLogout = () => {
     clearSession();
     clearConnectedWallet();
-    navigate("/app", { replace: true });
+    navigate("/", { replace: true });
   };
 
   return (
@@ -146,6 +172,66 @@ function DashboardPage({ initialRole = ROLES.CONSUMER, lockRole = false }) {
           </div>
         </div>
 
+        <div className="analytics-widgets">
+          <Motion.div className="metric-widget" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
+            <div className="metric-label">Total Batches</div>
+            <div className="metric-value">{totalBatches}</div>
+          </Motion.div>
+          <Motion.div className="metric-widget" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.04 }}>
+            <div className="metric-label">Total Scans</div>
+            <div className="metric-value">{totalScans}</div>
+          </Motion.div>
+          <Motion.div className="metric-widget danger" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.08 }}>
+            <div className="metric-label">Suspicious Scans</div>
+            <div className="metric-value">{suspiciousScans}</div>
+          </Motion.div>
+          <Motion.div className="metric-widget" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.12 }}>
+            <div className="metric-label">Trust Score</div>
+            <div className="metric-value">{trustScore}</div>
+          </Motion.div>
+        </div>
+
+        <div className="analytics-charts">
+          <Motion.div className="action-card" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
+            <div className="card-top">
+              <h3>Operational Metrics</h3>
+              <div className="card-icon">
+                <BarChart3 size={18} />
+              </div>
+            </div>
+            <div className="chart-frame">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={volumeChartData} margin={{ top: 8, right: 8, left: -12, bottom: 8 }}>
+                  <XAxis dataKey="name" tick={{ fill: "#6B5B69", fontSize: 12 }} axisLine={false} tickLine={false} />
+                  <YAxis allowDecimals={false} tick={{ fill: "#6B5B69", fontSize: 12 }} axisLine={false} tickLine={false} />
+                  <Tooltip cursor={{ fill: "rgba(56, 25, 50, 0.05)" }} />
+                  <Bar dataKey="value" fill="#381932" radius={[6, 6, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </Motion.div>
+
+          <Motion.div className="action-card" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.06 }}>
+            <div className="card-top">
+              <h3>Trust Visualization</h3>
+              <div className="card-icon">
+                <Shield size={18} />
+              </div>
+            </div>
+            <div className="chart-frame radial">
+              <ResponsiveContainer width="100%" height="100%">
+                <RadialBarChart innerRadius="72%" outerRadius="100%" barSize={16} data={trustChartData} startAngle={90} endAngle={-270}>
+                  <RadialBar background clockWise dataKey="value" cornerRadius={12} />
+                </RadialBarChart>
+              </ResponsiveContainer>
+              <div className="radial-score">
+                <div className="score-number">{trustScore}</div>
+                <div className="score-label">/ 100</div>
+              </div>
+            </div>
+          </Motion.div>
+        </div>
+
         <div className="action-grid">
           {effectiveRole === ROLES.MANUFACTURER && (
             <Motion.div className="action-card" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
@@ -214,19 +300,19 @@ function DashboardPage({ initialRole = ROLES.CONSUMER, lockRole = false }) {
               <div className="result-grid">
                 <div className="result-item">
                   <div className="label">Batches Created</div>
-                  <div className="value">148</div>
+                  <div className="value">{totalBatches}</div>
                 </div>
                 <div className="result-item">
                   <div className="label">Verified Scan Rate</div>
-                  <div className="value">96.2%</div>
+                  <div className="value">{totalScans > 0 ? `${Math.max(0, 100 - suspiciousScans * 10).toFixed(1)}%` : "0.0%"}</div>
                 </div>
                 <div className="result-item">
                   <div className="label">Active Recalls</div>
-                  <div className="value">3</div>
+                  <div className="value">{recalledCount}</div>
                 </div>
                 <div className="result-item">
                   <div className="label">Trust Avg</div>
-                  <div className="value">91/100</div>
+                  <div className="value">{avgTrust}/100</div>
                 </div>
               </div>
             </Motion.div>
@@ -287,9 +373,10 @@ function DashboardPage({ initialRole = ROLES.CONSUMER, lockRole = false }) {
                 </div>
               </div>
               <div className="form-group">
-                {sampleTracking.map((line) => (
-                  <div key={line} style={{ fontSize: "0.85rem", color: "var(--text-secondary)", padding: "4px 0" }}>
-                    • {line}
+                {trackedBatches.length === 0 && <div style={{ fontSize: "0.85rem", color: "var(--text-secondary)" }}>No shipment records yet.</div>}
+                {trackedBatches.slice(0, 6).map((batch) => (
+                  <div key={batch.batchId} style={{ fontSize: "0.85rem", color: "var(--text-secondary)", padding: "4px 0" }}>
+                    • {batch.batchId} {batch.owner ? `→ ${batch.owner.slice(0, 6)}...${batch.owner.slice(-4)}` : ""}
                   </div>
                 ))}
               </div>
@@ -305,10 +392,11 @@ function DashboardPage({ initialRole = ROLES.CONSUMER, lockRole = false }) {
                 </div>
               </div>
               <div className="form-group">
-                {sampleInventory.map((item) => (
+                {trackedBatches.length === 0 && <div style={{ fontSize: "0.85rem", color: "var(--text-secondary)" }}>No inventory batches yet.</div>}
+                {trackedBatches.slice(0, 8).map((item) => (
                   <div key={item.batchId} style={{ display: "flex", justifyContent: "space-between", fontSize: "0.85rem", color: "var(--text-secondary)", padding: "2px 0" }}>
                     <span>{item.batchId}</span>
-                    <span>{item.status}</span>
+                    <span>{item.recalled ? "Recalled" : Number(item.suspiciousScans || 0) > 0 ? "Flagged" : "Verified"}</span>
                   </div>
                 ))}
               </div>
@@ -446,19 +534,19 @@ function DashboardPage({ initialRole = ROLES.CONSUMER, lockRole = false }) {
               <div className="result-grid">
                 <div className="result-item">
                   <div className="label">Regions Monitored</div>
-                  <div className="value">42</div>
+                  <div className="value">{new Set(recentScanEvents.map((event) => event.location)).size}</div>
                 </div>
                 <div className="result-item">
                   <div className="label">Alerts This Week</div>
-                  <div className="value">27</div>
+                  <div className="value">{suspiciousScans}</div>
                 </div>
                 <div className="result-item">
                   <div className="label">Counterfeit Cases</div>
-                  <div className="value">9</div>
+                  <div className="value">{recalledCount}</div>
                 </div>
                 <div className="result-item">
                   <div className="label">Open Investigations</div>
-                  <div className="value">5</div>
+                  <div className="value">{suspiciousBatchCount}</div>
                 </div>
               </div>
             </Motion.div>
@@ -473,7 +561,12 @@ function DashboardPage({ initialRole = ROLES.CONSUMER, lockRole = false }) {
                 </div>
               </div>
               <div className="form-group">
-                <div style={{ fontSize: "0.85rem", color: "var(--text-secondary)" }}>Top hotspots: Mumbai, Delhi, Bengaluru, Kolkata</div>
+                {topLocations.length === 0 && <div style={{ fontSize: "0.85rem", color: "var(--text-secondary)" }}>No location scans yet.</div>}
+                {topLocations.map(([location, count]) => (
+                  <div key={location} style={{ fontSize: "0.85rem", color: "var(--text-secondary)", padding: "2px 0" }}>
+                    • {location}: {count} scans
+                  </div>
+                ))}
               </div>
             </Motion.div>
           )}
@@ -487,7 +580,7 @@ function DashboardPage({ initialRole = ROLES.CONSUMER, lockRole = false }) {
                 </div>
               </div>
               <div className="form-group">
-                <div style={{ fontSize: "0.85rem", color: "#b91c1c" }}>Real-time monitoring active. 3 high-priority anomalies detected.</div>
+                <div style={{ fontSize: "0.85rem", color: "#b91c1c" }}>Real-time monitoring active. {suspiciousBatchCount} batches currently flagged.</div>
               </div>
             </Motion.div>
           )}

@@ -12,7 +12,7 @@ export default function DocsPage() {
   const handleLogout = () => {
     clearSession();
     clearConnectedWallet();
-    navigate("/app", { replace: true });
+    navigate("/", { replace: true });
   };
 
   return (

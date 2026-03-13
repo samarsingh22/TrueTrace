@@ -1,8 +1,8 @@
 import React from "react";
 import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
 import Landing from "./pages/Landing";
-import WalletConnectPage from "./pages/WalletConnectPage";
 import AuthPage from "./pages/AuthPage";
+import RegisterBatch from "./pages/RegisterBatch";
 import ConsumerDashboard from "./dashboards/ConsumerDashboard";
 import ManufacturerDashboard from "./dashboards/ManufacturerDashboard";
 import DistributorDashboard from "./dashboards/DistributorDashboard";
@@ -19,9 +19,17 @@ function App() {
     <Router>
       <Routes>
         <Route path="/" element={<Landing />} />
-        <Route path="/app" element={<WalletConnectPage />} />
-        <Route path="/auth" element={<AuthPage />} />
+        <Route path="/login" element={<AuthPage />} />
         <Route path="/dashboard" element={<RoleDashboardRedirect />} />
+
+        <Route
+          path="/register-batch"
+          element={
+            <ProtectedRoute role="Manufacturer">
+              <RegisterBatch />
+            </ProtectedRoute>
+          }
+        />
 
         <Route
           path="/dashboard/manufacturer"
@@ -80,6 +88,7 @@ function App() {
             </ProtectedRoute>
           }
         />
+        <Route path="*" element={<Landing />} />
       </Routes>
     </Router>
   );

@@ -64,7 +64,7 @@ function Navbar() {
   const handleLogout = () => {
     clearSession();
     clearConnectedWallet();
-    navigate("/app", { replace: true });
+    navigate("/", { replace: true });
   };
 
   return (
@@ -87,7 +87,7 @@ function Navbar() {
             Logout
           </button>
         ) : (
-          <Link to="/app" className="btn-primary" style={{ textDecoration: "none" }}>
+          <Link to="/login" className="btn-primary" style={{ textDecoration: "none" }}>
             Launch App <span>→</span>
           </Link>
         )}
@@ -139,7 +139,7 @@ export default function LandingPage() {
           </Motion.p>
 
           <Motion.div className="hero-buttons" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6, delay: 0.6 }}>
-            <Link to="/app" className="btn-primary" style={{ textDecoration: "none" }}>
+            <Link to="/login" className="btn-primary" style={{ textDecoration: "none" }}>
               Enter Dashboard <span>→</span>
             </Link>
             <a href="#overview" className="btn-secondary" style={{ textDecoration: "none" }} onClick={(e) => scrollTo(e, "overview")}>
@@ -299,7 +299,7 @@ export default function LandingPage() {
         <h2>Secure Your Supply Chain Today</h2>
         <p>Join the decentralized network driving down counterfeit risks across global industries.</p>
         <div className="mt-8">
-          <Link to="/app" className="btn-primary" style={{ textDecoration: "none" }}>
+          <Link to="/login" className="btn-primary" style={{ textDecoration: "none" }}>
             Enter True Trace
           </Link>
         </div>

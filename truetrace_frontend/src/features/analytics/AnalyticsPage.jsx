@@ -1,11 +1,33 @@
+import { useMemo } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { motion as Motion } from "framer-motion";
 import { BarChart3, TrendingUp, Globe, ShieldCheck, AlertTriangle, Package, Users, Activity } from "lucide-react";
 import { clearConnectedWallet, clearSession, getSession } from "../../utils/authStorage";
+import { readScanEvents } from "../../ai/scanLogger";
+import { listTrackedBatches } from "../../services/batchStore";
 import Heatmap from "../../analytics/Heatmap";
 import SupplyTimeline from "../../analytics/SupplyTimeline";
 
 const fadeUp = { initial: { opacity: 0, y: 20 }, whileInView: { opacity: 1, y: 0 }, viewport: { once: true } };
+
+const CITY_COORDS = {
+  Mumbai: [19.076, 72.8777],
+  Delhi: [28.6139, 77.209],
+  Bengaluru: [12.9716, 77.5946],
+  Bangalore: [12.9716, 77.5946],
+  Kolkata: [22.5726, 88.3639],
+  Chennai: [13.0827, 80.2707],
+  Hyderabad: [17.385, 78.4867],
+  Pune: [18.5204, 73.8567],
+  London: [51.5072, -0.1276],
+  NewYork: [40.7128, -74.006],
+  Singapore: [1.3521, 103.8198],
+};
+
+function getMonthKey(ts) {
+  const d = new Date(ts);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
 
 export default function AnalyticsPage() {
   const navigate = useNavigate();
@@ -14,51 +36,122 @@ export default function AnalyticsPage() {
   const handleLogout = () => {
     clearSession();
     clearConnectedWallet();
-    navigate("/app", { replace: true });
+    navigate("/", { replace: true });
   };
 
+  const data = useMemo(() => {
+    const batches = listTrackedBatches();
+    const scans = readScanEvents().slice().sort((a, b) => Number(a.timestamp || 0) - Number(b.timestamp || 0));
+
+    const suspiciousBatchIds = new Set(
+      batches.filter((b) => Number(b.suspiciousScans || 0) > 0 || b.recalled).map((b) => String(b.batchId || "").toLowerCase()),
+    );
+
+    const totalBatches = batches.length;
+    const totalScans = scans.length;
+    const suspiciousScans = scans.filter((s) => suspiciousBatchIds.has(String(s.batchID || "").toLowerCase())).length;
+    const avgTrust = totalBatches
+      ? Math.round(batches.reduce((sum, b) => sum + Number(b.trustScore || 0), 0) / totalBatches)
+      : 0;
+
+    const recentMonthKeys = [];
+    const now = new Date();
+    for (let i = 5; i >= 0; i -= 1) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      recentMonthKeys.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+    }
+
+    const monthMap = Object.fromEntries(recentMonthKeys.map((k) => [k, { scans: 0, flags: 0 }]));
+    scans.forEach((scan) => {
+      const key = getMonthKey(scan.timestamp);
+      if (!monthMap[key]) return;
+      monthMap[key].scans += 1;
+      if (suspiciousBatchIds.has(String(scan.batchID || "").toLowerCase())) {
+        monthMap[key].flags += 1;
+      }
+    });
+
+    const timeline = recentMonthKeys.map((key) => {
+      const [year, month] = key.split("-");
+      const label = new Date(Number(year), Number(month) - 1, 1).toLocaleString(undefined, { month: "short" });
+      return { month: label, scans: monthMap[key].scans, flags: monthMap[key].flags };
+    });
+
+    const maxScans = Math.max(...timeline.map((t) => t.scans), 1);
+
+    const statusBreakdown = [
+      { name: "Verified", batches: batches.filter((b) => !b.recalled && Number(b.suspiciousScans || 0) === 0).length, color: "#22c55e" },
+      { name: "Flagged", batches: batches.filter((b) => !b.recalled && Number(b.suspiciousScans || 0) > 0).length, color: "#f59e0b" },
+      { name: "Recalled", batches: batches.filter((b) => b.recalled).length, color: "#ef4444" },
+    ];
+
+    const trustDistribution = [
+      { range: "90-100", pct: 0, color: "#22c55e" },
+      { range: "70-89", pct: 0, color: "#a3e635" },
+      { range: "50-69", pct: 0, color: "#f59e0b" },
+      { range: "30-49", pct: 0, color: "#f97316" },
+      { range: "0-29", pct: 0, color: "#ef4444" },
+    ];
+
+    if (totalBatches > 0) {
+      batches.forEach((b) => {
+        const score = Number(b.trustScore || 0);
+        if (score >= 90) trustDistribution[0].pct += 1;
+        else if (score >= 70) trustDistribution[1].pct += 1;
+        else if (score >= 50) trustDistribution[2].pct += 1;
+        else if (score >= 30) trustDistribution[3].pct += 1;
+        else trustDistribution[4].pct += 1;
+      });
+
+      trustDistribution.forEach((entry) => {
+        entry.pct = Math.round((entry.pct / totalBatches) * 100);
+      });
+    }
+
+    const locationCount = scans.reduce((acc, scan) => {
+      const city = String(scan.location || "").trim();
+      if (!city) return acc;
+      acc[city] = (acc[city] || 0) + 1;
+      return acc;
+    }, {});
+
+    const suspiciousLocations = Object.entries(locationCount)
+      .map(([city, count]) => ({ city, count, coords: CITY_COORDS[city.replace(/\s+/g, "")] || CITY_COORDS[city] }))
+      .filter((item) => Array.isArray(item.coords))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 8)
+      .map((item) => ({ id: item.city.toLowerCase(), city: item.city, coords: item.coords, suspiciousScans: item.count }));
+
+    const latestBatch = batches[0] || null;
+    const historyTypes = latestBatch?.history?.map((h) => h.type) || [];
+    const productJourney = [
+      "Created",
+      historyTypes.includes("transferred") ? "Transferred" : null,
+      historyTypes.includes("verified") ? "Verified" : null,
+      latestBatch?.recalled ? "Recalled" : "Active",
+    ].filter(Boolean);
+
+    return {
+      totalBatches,
+      totalScans,
+      suspiciousScans,
+      avgTrust,
+      timeline,
+      maxScans,
+      statusBreakdown,
+      trustDistribution,
+      suspiciousLocations,
+      productJourney,
+      activeStage: productJourney.length - 1,
+    };
+  }, []);
+
   const kpis = [
-    { icon: <Package size={22} />, label: "Batches Registered", value: "12,847", change: "+18%", up: true },
-    { icon: <Users size={22} />, label: "Active Supply Chains", value: "342", change: "+7%", up: true },
-    { icon: <ShieldCheck size={22} />, label: "Verified Scans", value: "89,120", change: "+24%", up: true },
-    { icon: <AlertTriangle size={22} />, label: "Counterfeits Flagged", value: "1,203", change: "-12%", up: false },
+    { icon: <Package size={22} />, label: "Total Batches", value: String(data.totalBatches), change: "on-chain tracked", up: true },
+    { icon: <Users size={22} />, label: "Total Scans", value: String(data.totalScans), change: "real scan logs", up: true },
+    { icon: <ShieldCheck size={22} />, label: "Average Trust Score", value: `${data.avgTrust}/100`, change: "derived live", up: true },
+    { icon: <AlertTriangle size={22} />, label: "Suspicious Scans", value: String(data.suspiciousScans), change: "risk signals", up: false },
   ];
-
-  const industries = [
-    { name: "Pharmaceuticals", batches: 4_521, risk: "High", color: "#ef4444" },
-    { name: "Electronics", batches: 3_102, risk: "Medium", color: "#f59e0b" },
-    { name: "Luxury Goods", batches: 2_340, risk: "High", color: "#ef4444" },
-    { name: "Auto Parts", batches: 1_572, risk: "Medium", color: "#f59e0b" },
-    { name: "Cosmetics", batches: 812, risk: "Low", color: "#22c55e" },
-    { name: "FMCG", batches: 500, risk: "Low", color: "#22c55e" },
-  ];
-
-  const timeline = [
-    { month: "Jan", scans: 4200, flags: 89 },
-    { month: "Feb", scans: 5100, flags: 102 },
-    { month: "Mar", scans: 6800, flags: 78 },
-    { month: "Apr", scans: 7400, flags: 134 },
-    { month: "May", scans: 9200, flags: 95 },
-    { month: "Jun", scans: 11000, flags: 112 },
-  ];
-  const maxScans = Math.max(...timeline.map((t) => t.scans));
-
-  const trustDistribution = [
-    { range: "90-100", pct: 62, color: "#22c55e" },
-    { range: "70-89", pct: 21, color: "#a3e635" },
-    { range: "50-69", pct: 10, color: "#f59e0b" },
-    { range: "30-49", pct: 5, color: "#f97316" },
-    { range: "0-29", pct: 2, color: "#ef4444" },
-  ];
-
-  const suspiciousLocations = [
-    { id: "mumbai", city: "Mumbai", coords: [19.076, 72.8777], suspiciousScans: 28 },
-    { id: "delhi", city: "Delhi", coords: [28.6139, 77.209], suspiciousScans: 21 },
-    { id: "bengaluru", city: "Bengaluru", coords: [12.9716, 77.5946], suspiciousScans: 15 },
-    { id: "kolkata", city: "Kolkata", coords: [22.5726, 88.3639], suspiciousScans: 10 },
-  ];
-
-  const productJourney = ["Manufacturer", "Distributor", "Retailer", "Consumer"];
 
   return (
     <>
@@ -94,7 +187,7 @@ export default function AnalyticsPage() {
         <div className="analytics-header">
           <Motion.h1 {...fadeUp}>Platform Analytics</Motion.h1>
           <Motion.p {...fadeUp} transition={{ delay: 0.1 }}>
-            Real-time insights across the True Trace anti-counterfeit network. Data refreshes every block confirmation.
+            Live analytics from your tracked on-chain batches and real scan logs.
           </Motion.p>
         </div>
 
@@ -105,7 +198,7 @@ export default function AnalyticsPage() {
               <div className="kpi-label">{kpi.label}</div>
               <div className="kpi-value">{kpi.value}</div>
               <div className={`kpi-change ${kpi.up ? "up" : "down"}`}>
-                <TrendingUp size={14} style={{ transform: kpi.up ? "" : "rotate(180deg)" }} /> {kpi.change} this month
+                <TrendingUp size={14} style={{ transform: kpi.up ? "" : "rotate(180deg)" }} /> {kpi.change}
               </div>
             </Motion.div>
           ))}
@@ -116,14 +209,14 @@ export default function AnalyticsPage() {
             <Activity size={18} /> Scan Activity - Last 6 Months
           </h3>
           <div className="bar-chart">
-            {timeline.map((t, i) => (
+            {data.timeline.map((t, i) => (
               <div className="bar-col" key={i}>
                 <div className="bar-wrapper">
-                  <Motion.div className="bar" initial={{ height: 0 }} whileInView={{ height: `${(t.scans / maxScans) * 100}%` }} viewport={{ once: true }} transition={{ delay: i * 0.08, duration: 0.5 }} />
+                  <Motion.div className="bar" initial={{ height: 0 }} whileInView={{ height: `${(t.scans / data.maxScans) * 100}%` }} viewport={{ once: true }} transition={{ delay: i * 0.08, duration: 0.5 }} />
                   <Motion.div
                     className="bar flag"
                     initial={{ height: 0 }}
-                    whileInView={{ height: `${(t.flags / maxScans) * 100}%` }}
+                    whileInView={{ height: `${(t.flags / data.maxScans) * 100}%` }}
                     viewport={{ once: true }}
                     transition={{ delay: i * 0.08 + 0.2, duration: 0.4 }}
                   />
@@ -134,10 +227,10 @@ export default function AnalyticsPage() {
           </div>
           <div className="chart-legend">
             <span>
-              <span className="legend-dot scans" /> Verified Scans
+              <span className="legend-dot scans" /> Total Scans
             </span>
             <span>
-              <span className="legend-dot flags" /> Flagged Anomalies
+              <span className="legend-dot flags" /> Suspicious Scans
             </span>
           </div>
         </Motion.div>
@@ -145,25 +238,23 @@ export default function AnalyticsPage() {
         <div className="analytics-two-col">
           <Motion.div className="analytics-card" {...fadeUp}>
             <h3>
-              <Globe size={18} /> Industry Breakdown
+              <Globe size={18} /> Batch Status Breakdown
             </h3>
             <div className="industry-list">
-              {industries.map((ind, i) => (
+              {data.statusBreakdown.map((item, i) => (
                 <div className="industry-row" key={i}>
-                  <span className="ind-name">{ind.name}</span>
+                  <span className="ind-name">{item.name}</span>
                   <div className="ind-bar-track">
                     <Motion.div
                       className="ind-bar-fill"
+                      style={{ background: item.color }}
                       initial={{ width: 0 }}
-                      whileInView={{ width: `${(ind.batches / industries[0].batches) * 100}%` }}
+                      whileInView={{ width: `${data.totalBatches > 0 ? (item.batches / data.totalBatches) * 100 : 0}%` }}
                       viewport={{ once: true }}
                       transition={{ delay: i * 0.06 }}
                     />
                   </div>
-                  <span className="ind-count">{ind.batches.toLocaleString()}</span>
-                  <span className="ind-risk" style={{ color: ind.color }}>
-                    {ind.risk}
-                  </span>
+                  <span className="ind-count">{item.batches}</span>
                 </div>
               ))}
             </div>
@@ -174,7 +265,7 @@ export default function AnalyticsPage() {
               <ShieldCheck size={18} /> Trust Score Distribution
             </h3>
             <div className="trust-dist">
-              {trustDistribution.map((t, i) => (
+              {data.trustDistribution.map((t, i) => (
                 <div className="trust-row" key={i}>
                   <span className="trust-range">{t.range}</span>
                   <div className="trust-bar-track">
@@ -191,30 +282,30 @@ export default function AnalyticsPage() {
                 </div>
               ))}
             </div>
-            <p className="trust-note">Trust Score = 100 - (Suspicious Scans x 10). Higher scores indicate authenticated, clean supply chain movement.</p>
+            <p className="trust-note">Derived from real verified batches tracked in your current app instance.</p>
           </Motion.div>
         </div>
 
         <Motion.div className="analytics-card anomaly-info" {...fadeUp}>
           <h3>
-            <AlertTriangle size={18} /> AI Anomaly Detection Engine
+            <AlertTriangle size={18} /> AI Anomaly Detection Status
           </h3>
           <div className="anomaly-grid">
             <div className="anomaly-item">
-              <strong>Geo-Mismatch Detection</strong>
-              <p>Flags products scanned in geographically impossible locations within short time windows.</p>
+              <strong>Batches Tracked</strong>
+              <p>{data.totalBatches}</p>
             </div>
             <div className="anomaly-item">
-              <strong>Velocity Analysis</strong>
-              <p>Detects rapid sequential scans that exceed realistic human interaction patterns.</p>
+              <strong>Scans Recorded</strong>
+              <p>{data.totalScans}</p>
             </div>
             <div className="anomaly-item">
-              <strong>Duplicate Scan Alerts</strong>
-              <p>Identifies when a single batch ID is scanned at multiple retail locations simultaneously.</p>
+              <strong>Suspicious Signals</strong>
+              <p>{data.suspiciousScans}</p>
             </div>
             <div className="anomaly-item">
-              <strong>Chain-of-Custody Gaps</strong>
-              <p>Monitors for breaks in the expected Manufacturer - Distributor - Retailer flow.</p>
+              <strong>Average Trust</strong>
+              <p>{data.avgTrust}/100</p>
             </div>
           </div>
         </Motion.div>
@@ -222,16 +313,20 @@ export default function AnalyticsPage() {
         <div className="analytics-two-col">
           <Motion.div className="analytics-card" {...fadeUp}>
             <h3>
-              <Globe size={18} /> Suspicious Scan Heatmap
+              <Globe size={18} /> Scan Location Heatmap
             </h3>
-            <Heatmap points={suspiciousLocations} />
+            {data.suspiciousLocations.length > 0 ? (
+              <Heatmap points={data.suspiciousLocations} />
+            ) : (
+              <div style={{ color: "var(--text-secondary)", fontSize: "0.9rem" }}>No mapped scan locations yet.</div>
+            )}
           </Motion.div>
 
           <Motion.div className="analytics-card" {...fadeUp} transition={{ delay: 0.1 }}>
             <h3>
-              <Activity size={18} /> Supply Journey Timeline
+              <Activity size={18} /> Latest Batch Journey
             </h3>
-            <SupplyTimeline journey={productJourney} activeStage={2} />
+            <SupplyTimeline journey={data.productJourney} activeStage={data.activeStage} />
           </Motion.div>
         </div>
       </div>

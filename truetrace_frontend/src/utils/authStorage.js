@@ -1,6 +1,18 @@
 const ACCOUNTS_KEY = "True Trace.accounts.v1";
 const SESSION_KEY = "True Trace.session.v1";
 const WALLET_KEY = "True Trace.connected.wallet.v1";
+const RESET_MARKER_KEY = "True Trace.local.reset.version";
+const RESET_VERSION = 1;
+const LEGACY_KEYS = [
+  "sentinelchain.accounts.v1",
+  "sentinelchain.session.v1",
+  "sentinelchain.connected.wallet.v1",
+  "True Trace.accounts.v1",
+  "True Trace.session.v1",
+  "True Trace.connected.wallet.v1",
+  "True Trace.ai.scan.events.v1",
+  "True Trace.batches.v1",
+];
 
 const ROLE_ALIASES = Object.freeze({
   pharmacy: "Retailer",
@@ -47,6 +59,35 @@ function writeJson(key, value) {
   localStorage.setItem(key, JSON.stringify(value));
 }
 
+function normalizeText(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+export function runStorageCleanup() {
+  try {
+    const currentResetVersion = Number(localStorage.getItem(RESET_MARKER_KEY) || "0");
+    if (currentResetVersion < RESET_VERSION) {
+      LEGACY_KEYS.forEach((key) => localStorage.removeItem(key));
+      localStorage.setItem(RESET_MARKER_KEY, String(RESET_VERSION));
+    }
+
+    const accounts = getAccounts();
+    if (!Array.isArray(accounts)) {
+      writeJson(ACCOUNTS_KEY, []);
+    }
+
+    const session = readJson(SESSION_KEY, null);
+    if (session && typeof session === "object" && session.role) {
+      writeJson(SESSION_KEY, {
+        ...session,
+        role: normalizeRole(session.role),
+      });
+    }
+  } catch {
+    localStorage.removeItem(SESSION_KEY);
+  }
+}
+
 export function getAccounts() {
   const accounts = readJson(ACCOUNTS_KEY, []);
   return Array.isArray(accounts) ? accounts : [];
@@ -68,9 +109,9 @@ export function createAccount(payload) {
 
   const exists = accounts.some(
     (account) =>
-      account.walletAddress.toLowerCase() === normalized.walletAddress.toLowerCase() &&
-      account.role === normalized.role &&
-      account.name.toLowerCase() === normalized.name.toLowerCase(),
+      normalizeText(account.walletAddress) === normalizeText(normalized.walletAddress) &&
+      normalizeRole(account.role) === normalizeRole(normalized.role) &&
+      normalizeText(account.name) === normalizeText(normalized.name),
   );
 
   if (exists) {
@@ -89,15 +130,15 @@ export function loginAccount(payload) {
   const inputCategory = String(payload.manufacturerCategory || "").trim().toLowerCase();
   const match = accounts.find(
     (account) =>
-      account.walletAddress.toLowerCase() === payload.walletAddress.toLowerCase() &&
+      normalizeText(account.walletAddress) === normalizeText(payload.walletAddress) &&
       normalizeRole(account.role) === inputRole &&
       (
         inputRole !== "Manufacturer" ||
         !String(account.manufacturerCategory || "").trim() ||
         String(account.manufacturerCategory || "").trim().toLowerCase() === inputCategory
       ) &&
-      account.name.toLowerCase() === payload.name.trim().toLowerCase() &&
-      account.organization.toLowerCase() === payload.organization.trim().toLowerCase() &&
+      normalizeText(account.name) === normalizeText(payload.name) &&
+      normalizeText(account.organization) === normalizeText(payload.organization) &&
       account.password === payload.password,
   );
 

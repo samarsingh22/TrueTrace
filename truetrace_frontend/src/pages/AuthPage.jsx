@@ -44,9 +44,7 @@ export default function AuthPage() {
       return;
     }
 
-    if (!wallet) {
-      navigate("/app", { replace: true });
-    }
+    // no wallet gate — wallet connection is optional
   }, [navigate, wallet]);
 
   const setField = (field, value) => {

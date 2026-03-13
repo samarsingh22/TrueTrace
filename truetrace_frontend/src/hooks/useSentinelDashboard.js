@@ -11,6 +11,7 @@ import { resolveBatchIdFromInput } from "../services/qrVerification";
 import { detectAnomalies } from "../ai/anomalyDetection";
 import { calculateTrustScore } from "../ai/trustScore";
 import { clearScanEvents, getBatchScanEvents, getCurrentLocation, logScanEvent, readScanEvents } from "../ai/scanLogger";
+import { listTrackedBatches, markBatchRecalled, markBatchTransferred, upsertTrackedBatch } from "../services/batchStore";
 
 const EMPTY_FORM = {
   batchId: "",
@@ -35,6 +36,7 @@ export function useSentinelDashboard(options = {}) {
   const [transferTxHash, setTransferTxHash] = useState("");
   const [recallTxHash, setRecallTxHash] = useState("");
   const [batchData, setBatchData] = useState(null);
+  const [trackedBatches, setTrackedBatches] = useState([]);
   const [recentScanEvents, setRecentScanEvents] = useState([]);
 
   const [loading, setLoading] = useState(false);
@@ -84,6 +86,10 @@ export function useSentinelDashboard(options = {}) {
     setRecentScanEvents(next);
   };
 
+  const refreshTrackedBatches = () => {
+    setTrackedBatches(listTrackedBatches());
+  };
+
   const clearRecentScanEvents = () => {
     clearScanEvents();
     setRecentScanEvents([]);
@@ -96,6 +102,7 @@ export function useSentinelDashboard(options = {}) {
 
   useEffect(() => {
     refreshRecentScanEvents();
+    refreshTrackedBatches();
   }, []);
 
   async function connectWallet() {
@@ -130,6 +137,21 @@ export function useSentinelDashboard(options = {}) {
       const txHash = await createBatchTx(contract, { batchId, productName, mfgDate, expDate });
       setCreateTxHash(txHash);
       setLastCreatedBatch({ batchId, productName, mfgDate, expDate, recalled: false });
+      upsertTrackedBatch(
+        {
+          batchId,
+          productName,
+          mfgDate,
+          expDate,
+          owner: account || "",
+          recalled: false,
+          trustScore: 100,
+          suspiciousScans: 0,
+          scansObserved: getBatchScanEvents(batchId).length,
+        },
+        { eventType: "created", txHash },
+      );
+      refreshTrackedBatches();
       setForm((prev) => ({ ...prev, batchId: "", productName: "", mfgDate: "", expDate: "" }));
       displayMessage("Product batch registered successfully on-chain.", "success");
     } catch {
@@ -155,6 +177,8 @@ export function useSentinelDashboard(options = {}) {
       setLoading(true);
       const txHash = await transferBatchTx(contract, { batchId: transferId, newOwner });
       setTransferTxHash(txHash);
+      markBatchTransferred(transferId, newOwner, txHash);
+      refreshTrackedBatches();
       setForm((prev) => ({ ...prev, transferId: "", newOwner: "" }));
       displayMessage("Custody transferred successfully.", "success");
     } catch {
@@ -180,6 +204,8 @@ export function useSentinelDashboard(options = {}) {
       setLoading(true);
       const txHash = await recallBatchTx(contract, recallId);
       setRecallTxHash(txHash);
+      markBatchRecalled(recallId, txHash);
+      refreshTrackedBatches();
       setForm((prev) => ({ ...prev, recallId: "" }));
       displayMessage(`Batch ${recallId} has been successfully recalled.`, "success");
     } catch {
@@ -224,6 +250,18 @@ export function useSentinelDashboard(options = {}) {
         suspiciousScans: anomaly.suspiciousScans,
         scansObserved: getBatchScanEvents(batch.batchId).length,
       });
+
+      upsertTrackedBatch(
+        {
+          ...batch,
+          lastLocation: location,
+          trustScore,
+          suspiciousScans: anomaly.suspiciousScans,
+          scansObserved: getBatchScanEvents(batch.batchId).length,
+        },
+        { eventType: "verified" },
+      );
+      refreshTrackedBatches();
       refreshRecentScanEvents();
 
       setForm((prev) => ({ ...prev, verifyId: normalizedBatchId }));
@@ -247,6 +285,7 @@ export function useSentinelDashboard(options = {}) {
     recallTxHash,
     lastCreatedBatch,
     batchData,
+    trackedBatches,
     recentScanEvents,
     setField,
     handleRoleChange,

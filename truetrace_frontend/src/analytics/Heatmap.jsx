@@ -1,13 +1,6 @@
 import "leaflet/dist/leaflet.css";
 import { MapContainer, TileLayer, CircleMarker, Popup } from "react-leaflet";
 
-const DEFAULT_POINTS = [
-  { id: "mumbai", city: "Mumbai", coords: [19.076, 72.8777], suspiciousScans: 28 },
-  { id: "delhi", city: "Delhi", coords: [28.6139, 77.209], suspiciousScans: 21 },
-  { id: "bengaluru", city: "Bengaluru", coords: [12.9716, 77.5946], suspiciousScans: 15 },
-  { id: "kolkata", city: "Kolkata", coords: [22.5726, 88.3639], suspiciousScans: 10 },
-];
-
 function getHeatColor(value, maxValue) {
   const ratio = maxValue > 0 ? value / maxValue : 0;
   if (ratio >= 0.75) return "#dc2626";
@@ -17,7 +10,7 @@ function getHeatColor(value, maxValue) {
 }
 
 export default function Heatmap({
-  points = DEFAULT_POINTS,
+  points = [],
   center = [22.9734, 78.6569],
   zoom = 5,
   height = 360,

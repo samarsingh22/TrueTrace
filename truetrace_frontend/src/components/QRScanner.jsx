@@ -1,11 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Html5Qrcode } from "html5-qrcode";
 import { verifyBatch } from "../blockchain/contract";
 import { calculateTrustScore } from "../ai/trustScore";
 import { detectAnomalies } from "../ai/anomalyDetection";
 import { getBatchScanEvents, getCurrentLocation, logScanEvent, readScanEvents } from "../ai/scanLogger";
-
-const QR_READER_REGION_ID = "truetrace-qr-reader";
+import { upsertTrackedBatch } from "../services/batchStore";
 
 function extractBatchId(rawValue) {
   const value = (rawValue || "").trim();
@@ -24,14 +23,23 @@ function extractBatchId(rawValue) {
 }
 
 export default function QRScanner({ onVerified, onError, onScanLogged }) {
-  const [scanning, setScanning] = useState(false);
+  const readerId = useId().replace(/:/g, "_");
+  const qrReaderRegionId = `truetrace_qr_reader_${readerId}`;
+  const [scanMode, setScanMode] = useState("camera");
   const [lastBatchId, setLastBatchId] = useState("");
   const [message, setMessage] = useState("Scan a QR code to verify a batch.");
   const lastScanRef = useRef("");
   const scannerRef = useRef(null);
   const scanningRef = useRef(false);
+  const fileInputRef = useRef(null);
 
-  async function handleResult(rawText) {
+  const onVerifiedRef = useRef(onVerified);
+  const onErrorRef = useRef(onError);
+  const onScanLoggedRef = useRef(onScanLogged);
+  onVerifiedRef.current = onVerified;
+  onErrorRef.current = onError;
+  onScanLoggedRef.current = onScanLogged;
+  async function processDecodedResult(rawText) {
     if (!rawText || scanningRef.current) return;
 
     const batchId = extractBatchId(rawText);
@@ -40,7 +48,6 @@ export default function QRScanner({ onVerified, onError, onScanLogged }) {
     lastScanRef.current = batchId;
     setLastBatchId(batchId);
     scanningRef.current = true;
-    setScanning(true);
     setMessage(`Verifying ${batchId} on-chain...`);
 
     try {
@@ -62,54 +69,136 @@ export default function QRScanner({ onVerified, onError, onScanLogged }) {
         scansObserved: getBatchScanEvents(chainData.batchId).length,
       };
 
+      upsertTrackedBatch(
+        {
+          ...chainData,
+          lastLocation: location,
+          trustScore,
+          suspiciousScans: anomaly.suspiciousScans,
+          scansObserved: getBatchScanEvents(chainData.batchId).length,
+        },
+        { eventType: "verified" },
+      );
+
       setMessage(`Verification completed for ${batchId}.`);
-      if (onVerified) onVerified(verifiedData);
-      if (onScanLogged) onScanLogged();
+      if (onVerifiedRef.current) onVerifiedRef.current(verifiedData);
+      if (onScanLoggedRef.current) onScanLoggedRef.current();
     } catch (error) {
       setMessage(error?.message || "Verification failed.");
-      if (onError) onError(error);
+      if (onErrorRef.current) onErrorRef.current(error);
     } finally {
       scanningRef.current = false;
-      setScanning(false);
     }
   }
 
   useEffect(() => {
-    const qrCodeScanner = new Html5Qrcode(QR_READER_REGION_ID);
+    if (scanMode !== "camera") {
+      return undefined;
+    }
+
+    async function handleResult(rawText) {
+      await processDecodedResult(rawText);
+    }
+
+    const host = document.getElementById(qrReaderRegionId);
+    if (!host) return undefined;
+
+    const qrCodeScanner = new Html5Qrcode(qrReaderRegionId);
     scannerRef.current = qrCodeScanner;
 
     async function startScanner() {
       try {
+        const cameras = await Html5Qrcode.getCameras();
+        const backCamera = cameras.find((camera) => /(back|rear|environment)/i.test(camera.label)) || cameras[cameras.length - 1];
+
+        if (!backCamera) {
+          setMessage("No camera detected on this device.");
+          return;
+        }
+
         await qrCodeScanner.start(
-          { facingMode: { ideal: "environment" } },
+          { deviceId: { exact: backCamera.id } },
           { fps: 10, qrbox: { width: 240, height: 240 } },
           (decodedText) => {
             handleResult(decodedText);
           },
           () => {},
         );
+        setMessage(`Using camera: ${backCamera.label || "Integrated Camera"}`);
       } catch {
-        setMessage("Unable to access camera. Check camera permissions and try again.");
+        try {
+          await qrCodeScanner.start(
+            { facingMode: { ideal: "environment" } },
+            { fps: 10, qrbox: { width: 240, height: 240 } },
+            (decodedText) => {
+              handleResult(decodedText);
+            },
+            () => {},
+          );
+          setMessage("Using integrated camera.");
+        } catch {
+          setMessage("Unable to access integrated camera. Allow camera permission and open over localhost/https.");
+        }
       }
     }
 
     startScanner();
 
     return () => {
-      if (!scannerRef.current) return;
-      scannerRef.current
-        .stop()
-        .catch(() => {})
-        .finally(() => {
-          scannerRef.current?.clear().catch(() => {});
-        });
+      const scanner = scannerRef.current;
+      scannerRef.current = null;
+      if (!scanner) return;
+
+      try {
+        Promise.resolve(scanner.stop())
+          .catch(() => {})
+          .finally(() => {
+            Promise.resolve(scanner.clear()).catch(() => {});
+          });
+      } catch {
+        Promise.resolve(scanner.clear()).catch(() => {});
+      }
     };
-  }, []);
+  }, [qrReaderRegionId, scanMode]);
+
+  async function handleFileUpload(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setMessage("Reading uploaded QR image...");
+    const fileScanner = new Html5Qrcode(qrReaderRegionId);
+
+    try {
+      const decodedText = await fileScanner.scanFile(file, true);
+      await processDecodedResult(decodedText);
+    } catch {
+      setMessage("No readable QR code found in uploaded image.");
+    } finally {
+      await fileScanner.clear().catch(() => {});
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    }
+  }
 
   return (
     <div>
+      <div style={{ display: "flex", gap: "10px", marginBottom: "10px" }}>
+        <button type="button" className="btn-secondary" style={{ opacity: scanMode === "camera" ? 1 : 0.7 }} onClick={() => setScanMode("camera")}>Use Camera</button>
+        <button type="button" className="btn-secondary" style={{ opacity: scanMode === "file" ? 1 : 0.7 }} onClick={() => setScanMode("file")}>Upload from Browser</button>
+      </div>
+
       <div style={{ overflow: "hidden", borderRadius: "10px", border: "1px solid var(--border)", minHeight: "280px" }}>
-        <div id={QR_READER_REGION_ID} />
+        {scanMode === "camera" ? (
+          <div id={qrReaderRegionId} />
+        ) : (
+          <div style={{ padding: "16px" }}>
+            <input ref={fileInputRef} type="file" accept="image/*" onChange={handleFileUpload} />
+            <div style={{ marginTop: "10px", color: "var(--text-secondary)", fontSize: "0.82rem" }}>
+              Upload an image containing a QR code to verify.
+            </div>
+          </div>
+        )}
       </div>
 
       <div style={{ marginTop: "10px", color: "var(--text-secondary)", fontSize: "0.82rem" }}>
