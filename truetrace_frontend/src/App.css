@@ -1,6 +1,6 @@
 /* =============================================
-   TrueTrace — Vercel/Linear Inspired Styles
-   ============================================= */
+  True Trace — Vercel/Linear Inspired Styles
+  ============================================= */
 
 #root {
   width: 100%;
@@ -378,6 +378,24 @@
 
 .form-group input::placeholder {
   color: #bbb;
+}
+
+.form-group select {
+  width: 100%;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.9rem;
+  font-family: inherit;
+  color: var(--text);
+  background: var(--bg);
+  outline: none;
+  transition: border-color 0.2s;
+  box-sizing: border-box;
+}
+
+.form-group select:focus {
+  border-color: #999;
 }
 
 .card-footer {
